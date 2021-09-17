@@ -8,7 +8,10 @@ import org.apache.spark.sql.functions.{col, sum}
 
 import org.apache.spark.sql.catalyst.encoders.RowEncoder
 import scala.io.Source
-
+import java.io.File
+import java.io.PrintWriter
+import java.io.FileWriter
+import java.io.BufferedWriter
 
 import org.apache.spark.sql.{SparkSession,Encoders,Encoder,DataFrame, Row, Column}
 import org.apache.spark.rdd.RDD
@@ -19,23 +22,49 @@ import org.apache.spark.sql.types.{StringType, StructType,StructField, ArrayType
 object RandNE{
 
  def main(args: Array[String]) {
+
      val spark = SparkSession
                         .builder()
                         .appName("RandNE")
                         .getOrCreate()
 
-     val a = RandNE(spark, "./graph.csv", 3, 2, List(1,2,3))
-     a.execute
-     a.showEmmbendings
+     spark.sparkContext.setLogLevel("Error")
+
+
+     val q: Int = args(0).toInt
+     val dimensionality: Int = args(1).toInt
+     val graph: String = args(2)
+     val numberOfPartitions: Int = args(3).toInt
+
+     val e = args(4).toInt     
+
+     val start:Long = System.nanoTime()
+     val rn = new RandNE(spark, graph, dimensionality, q, List.range(1,q + 2).map(x => x.toDouble), numberOfPartitions)
+     rn.execute
+     val executionTime: Double = (System.nanoTime() - start).toDouble / 1000000000.0
+     val writer = new BufferedWriter(new FileWriter("./executionsTime_RandNE.csv", true))
+
+     if (q < e){
+       if (q == 2)
+        writer.write(numberOfPartitions.toString + ",")
+     writer.write(executionTime.toString() + ",")
+     }
+     else {
+     writer.write(executionTime.toString())
+     writer.newLine()
+     }
+     writer.close()
+     println("Xronos ekteleshs: " + executionTime + "\n")
+     //rn.showEmmbendings
  }
 
- case class RandNE(spark: SparkSession, path:String, dimensionality: Int, q: Int, weights:List[Double]) {
+ case class RandNE(var spark: SparkSession, path:String, dimensionality: Int, q: Int, weights:List[Double], numberOfPartitions: Int) {
 
 
     private val numberOfNodes: Int = this.getNumberOfGraphsNodes()
 
 
-    private val adjMatrix_RDD: RDD[IndexedRow]  = this.spark.sparkContext.textFile(path,3).map(nodeVector => {
+    private val adjMatrix_RDD: RDD[IndexedRow]  = this.spark.sparkContext.textFile(path,numberOfPartitions).map(nodeVector => {
                                                                                                               val nv: Array[Double] = nodeVector.split(",").map(x => x.toDouble)
                                                                                                               IndexedRow(nv(0).toLong, Vectors.dense(nv.slice(1,this.numberOfNodes + 1)))
                                                                                                               }
@@ -64,7 +93,7 @@ object RandNE{
       // At initialization, the U_0 (Gaussian random matrix) is stored
       // Implements line 1 of Algorithm 1
       var U_list:List[RDD[Row]] = List(RandomRDDs.normalVectorRDD(spark.sparkContext,this.numberOfNodes,this.dimensionality)
-                                                 .repartition(3)
+                                                 .repartition(numberOfPartitions)
                                                  .zipWithIndex()
                                                  .map(x => Row.fromSeq(x._1.toArray.map(y => (1/sqrt(this.dimensionality)) * y.toDouble).+:(x._2.toInt)))
                                       )
@@ -121,7 +150,7 @@ object RandNE{
     private def matricesMultiplication(U:DenseMatrix): RDD[Row] = {
 
       this.adjMatrix.multiply(U).rows
-                                .repartition(3)
+                                .repartition(numberOfPartitions)
                                 .map((x => Row.fromSeq(x.vector.toArray.+:(x.index.toInt))))
     }
 
@@ -130,30 +159,14 @@ object RandNE{
         Source.fromFile(path).bufferedReader().readLine().split(",").length - 1
     }
 
-    //private def generateAdjMatrix_DFSchema() : StructType = {
-      //StructType(List.range(1,this.numberOfNodes + 1).map(x => StructField(x.toString(), DoubleType, false)).+:(StructField("Id",StringType,false)))
-    //}
-
-    //private def generateGuassianRandomMatrix_DFSchema() : StructType = {
-      //StructType(List.range(1,this.dimensionality + 1).map(x => StructField(x.toString(), DoubleType, false)))
-    //}
 
     private def generate_UMatrix_DFSchema() : StructType = {
       StructType(List.range(1,this.dimensionality + 1).map(x => StructField(x.toString(), DoubleType, false)).+:(StructField("Id",IntegerType,false)))
     }
 
-    private def weightsNumberEqualTo_q(weights:List[Double], q:Int): Unit = {
-      try {
-        require(weights.length == q)
-      }
-      catch {
-        case error: IllegalArgumentException =>
-          println("The number of weights must be equal to q")
-          System.exit(0)
-      }
 
-    }
 
  }
+
 }
 
